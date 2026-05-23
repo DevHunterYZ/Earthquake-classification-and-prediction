@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deprem Artci Tahmin Sistemi</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+body{background:linear-gradient(135deg,#0f172a,#1e293b);min-height:100vh;color:#e2e8f0;font-family:system-ui,-apple-system,sans-serif}
+.glass{background:rgba(30,41,59,.75);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.08)}
+.risk-high{background:#ef4444;color:#fff}
+.risk-medium{background:#f97316;color:#000}
+.risk-low{background:#22c55e;color:#000}
+.mag-bar{height:8px;border-radius:4px;transition:width .6s ease}
+#map{height:350px;border-radius:12px;z-index:1}
+.event-row{cursor:pointer;transition:all .15s}
+.event-row:hover{background:rgba(59,130,246,.15)!important}
+.tab-btn.active{background:#3b82f6!important;color:#fff!important}
+.pulse{animation:pulse 2s infinite}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+</style>
+</head>
+<body class="p-4 max-w-7xl mx-auto">
+
+<header class="flex flex-wrap justify-between items-center mb-6 gap-3">
+<div>
+<h1 class="text-3xl font-bold bg-gradient-to-r from-red-500 via-orange-500 to-yellow-500 bg-clip-text text-transparent">&#x1F30A; Deprem Artci Tahmin Sistemi</h1>
+<p class="text-gray-400 text-sm mt-1">Omori-Utsu &bull; Gutenberg-Richter &bull; Bath Kanunu &bull; Risk Analizi</p>
+</div>
+<div class="flex gap-2">
+<button onclick="loadRecentMainshocks()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-semibold transition">&#x1F310; Canli Depremler</button>
+<button onclick="scrollToManual()" class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-semibold transition">&#x270F; Manuel Giris</button>
+</div>
+</header>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+<!-- LEFT PANEL -->
+<div class="lg:col-span-1 space-y-4">
+
+<div class="glass rounded-xl p-4">
+<h2 class="font-semibold text-blue-400 mb-3 text-lg">&#x1F310; Canli Depremler (USGS)</h2>
+<div class="flex gap-1 mb-3">
+<button id="tabWorld" class="tab-btn active px-3 py-1.5 rounded text-xs font-semibold transition" onclick="switchTab('world',this)">Dunya M5+</button>
+<button id="tabTurkey" class="tab-btn px-3 py-1.5 rounded text-xs font-semibold bg-slate-700 transition" onclick="switchTab('turkey',this)">Turkiye M4+</button>
+</div>
+<div id="eventsLoading" class="text-center py-6 text-gray-500 text-sm pulse">USGS verileri cekiliyor...</div>
+<div id="eventsList" class="max-h-[55vh] overflow-y-auto space-y-1.5 hidden"></div>
+<div id="eventsEmpty" class="text-center py-6 text-gray-500 text-sm hidden">Bu kategoride deprem bulunamadi</div>
+</div>
+
+<div id="manualSection" class="glass rounded-xl p-4">
+<h2 class="font-semibold text-green-400 mb-3 text-lg">&#x270F; Manuel Ana Deprem Girisi</h2>
+<div class="grid grid-cols-2 gap-2">
+<div><label class="text-xs text-gray-400 block mb-0.5">Buyukluk (Mw)</label><input id="mMag" type="number" value="6.5" step="0.1" min="3" max="9.5" class="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-600 rounded text-sm focus:border-blue-500 focus:outline-none"></div>
+<div><label class="text-xs text-gray-400 block mb-0.5">Derinlik (km)</label><input id="mDepth" type="number" value="10" step="1" min="0" max="700" class="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-600 rounded text-sm focus:border-blue-500 focus:outline-none"></div>
+<div><label class="text-xs text-gray-400 block mb-0.5">Enlem</label><input id="mLat" type="number" value="39.0" step="0.01" min="-90" max="90" class="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-600 rounded text-sm focus:border-blue-500 focus:outline-none"></div>
+<div><label class="text-xs text-gray-400 block mb-0.5">Boylam</label><input id="mLon" type="number" value="35.0" step="0.01" min="-180" max="180" class="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-600 rounded text-sm focus:border-blue-500 focus:outline-none"></div>
+</div>
+<button onclick="predictManual()" class="w-full mt-3 py-2.5 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 rounded-lg text-sm font-semibold transition">&#x1F52E; Tahminle</button>
+</div>
+
+<div class="glass rounded-xl p-3 text-xs text-gray-500">
+<b class="text-purple-400">Modeller:</b> Omori-Utsu (zaman) | Gutenberg-Richter (buyukluk) | Bath Kanunu (en buyuk artci) | Coulomb stres (mekansal)
+</div>
+</div>
+
+<!-- RIGHT PANEL -->
+<div class="lg:col-span-2 space-y-4">
+
+<div id="loading" class="glass rounded-xl p-16 text-center hidden">
+<div class="animate-spin rounded-full h-12 w-12 border-b-2 border-red-500 mx-auto"></div>
+<p class="mt-4 text-gray-400">Modeller calisiyor, tahminler hesaplaniyor...</p>
+</div>
+
+<div id="empty" class="glass rounded-xl p-16 text-center">
+<div class="text-6xl mb-4">&#x1F30A;</div>
+<h3 class="text-xl font-semibold mb-2">Tahmine Basla</h3>
+<p class="text-gray-400 max-w-md mx-auto text-sm">Soldaki listeden <b class="text-blue-400">canli bir deprem</b> secin veya <b class="text-green-400">manuel deger</b> girerek artci tahmini yapin.</p>
+</div>
+
+<div id="results" class="hidden space-y-4">
+
+<!-- Risk Banner -->
+<div id="riskBanner" class="glass rounded-xl p-5 flex items-center justify-between border-l-4">
+<div>
+<div class="text-xs text-gray-400 uppercase tracking-wider">Risk Seviyesi</div>
+<div id="riskLevel" class="text-2xl font-bold mt-1"></div>
+<div id="mainshockInfo" class="text-xs text-gray-400 mt-1"></div>
+</div>
+<div class="text-right">
+<div class="text-xs text-gray-400 uppercase tracking-wider">Risk Skoru</div>
+<div id="riskScore" class="text-4xl font-bold"></div>
+<div class="text-xs text-gray-500">/100</div>
+</div>
+</div>
+
+<!-- Magnitude Bins -->
+<div class="glass rounded-xl p-5">
+<h3 class="font-semibold text-orange-400 mb-4 text-lg">&#x1F4CA; Buyukluk Araligina Gore Beklenen Artci Sayisi <span class="text-xs text-gray-500 font-normal">(30 gun)</span></h3>
+<div id="magBins" class="space-y-3"></div>
+</div>
+
+<!-- Time Windows -->
+<div class="glass rounded-xl p-5">
+<h3 class="font-semibold text-blue-400 mb-4 text-lg">&#x23F1; Zaman Dilimine Gore Beklenen Artci Sayisi</h3>
+<div id="timeWindows" class="grid grid-cols-2 sm:grid-cols-5 gap-2"></div>
+</div>
+
+<!-- Largest Aftershock -->
+<div class="glass rounded-xl p-5">
+<h3 class="font-semibold text-purple-400 mb-3 text-lg">&#x1F4A5; En Buyuk Beklenen Artci (Bath Kanunu)</h3>
+<div id="largestAftershock" class="text-sm space-y-1"></div>
+</div>
+
+<!-- Charts -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+<div class="glass rounded-xl p-4">
+<h3 class="font-semibold text-orange-400 mb-2">&#x1F4C8; Omori-Utsu Yogunluk Egrisi</h3>
+<div id="omoriChart" style="height:300px"></div>
+</div>
+<div class="glass rounded-xl p-4">
+<h3 class="font-semibold text-green-400 mb-2">&#x1F4C9; Gutenberg-Richter Dagilimi</h3>
+<div id="grChart" style="height:300px"></div>
+</div>
+</div>
+
+<!-- Map -->
+<div class="glass rounded-xl p-4">
+<h3 class="font-semibold mb-3">&#x1F5FA; Deprem Konumu</h3>
+<div id="map"></div>
+</div>
+
+</div>
+</div>
+</div>
+
+<footer class="mt-8 text-center text-gray-600 text-xs pb-4">
+<p>Veri Kaynagi: USGS Earthquake Catalog | Tahminler istatistiksel modellere dayanir, kesinlik garantisi yoktur.</p>
+</footer>
+
+<script>
+const API='http://localhost:8000';
+let map=null,markers=[],currentTab='world',_events=[];
+
+function initMap(){
+map=L.map('map').setView([39,35],5);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OSM',maxZoom:18}).addTo(map);
+}
+
+async function loadRecentMainshocks(){
+document.getElementById('eventsLoading').classList.remove('hidden');
+document.getElementById('eventsList').classList.add('hidden');
+document.getElementById('eventsEmpty').classList.add('hidden');
+try{
+const r=await fetch(API+'/recent-mainshocks');
+if(!r.ok)throw new Error('API yanit vermedi ('+r.status+')');
+const d=await r.json();
+const events=d[currentTab]||[];
+_events=events;
+renderEvents(events);
+}catch(e){
+document.getElementById('eventsLoading').innerHTML='<span class="text-red-400">Hata: '+e.message+'</span>';
+console.error(e);
+}
+}
+
+function renderEvents(events){
+const list=document.getElementById('eventsList');
+document.getElementById('eventsLoading').classList.add('hidden');
+if(!events||!events.length){
+document.getElementById('eventsEmpty').classList.remove('hidden');
+return;
+}
+list.innerHTML=events.map((e,i)=>{
+const magColor=e.magnitude>=7?'text-red-400 font-extrabold':e.magnitude>=6?'text-red-400 font-bold':e.magnitude>=5?'text-orange-400 font-bold':'text-yellow-400 font-semibold';
+const timeStr=new Date(e.time).toLocaleString('tr-TR',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+return '<div class="event-row glass rounded-lg p-3 flex justify-between items-center gap-2" onclick="predictEvent('+i+')">'
++'<div class="min-w-0"><div class="font-semibold text-sm truncate">'+(e.place||'Bilinmeyen')+'</div>'
++'<div class="text-xs text-gray-500 mt-0.5">'+timeStr+' &bull; '+e.depth.toFixed(0)+' km</div></div>'
++'<div class="text-right flex-shrink-0"><span class="text-lg '+magColor+'">M'+e.magnitude.toFixed(1)+'</span>'
++'<div class="text-xs text-gray-600">'+e.latitude.toFixed(2)+', '+e.longitude.toFixed(2)+'</div></div></div>';
+}).join('');
+list.classList.remove('hidden');
+}
+
+function switchTab(tab,btn){
+currentTab=tab;
+document.querySelectorAll('.tab-btn').forEach(b=>{b.classList.remove('active');b.classList.add('bg-slate-700')});
+btn.classList.add('active');
+btn.classList.remove('bg-slate-700');
+loadRecentMainshocks();
+}
+
+async function predictEvent(idx){
+const e=_events[idx];
+if(!e){alert('Deprem verisi bulunamadi');return}
+showLoading();
+try{
+const r=await fetch(API+'/predict',{
+method:'POST',
+headers:{'Content-Type':'application/json'},
+body:JSON.stringify({
+mainshock:{time:e.time,magnitude:e.magnitude,latitude:e.latitude,longitude:e.longitude,depth:e.depth},
+aftershocks_so_far:[],
+horizon_days:30,
+model_type:'statistical'
+})
+});
+if(!r.ok){const err=await r.json();throw new Error(err.detail||'Sunucu hatasi ('+r.status+')')}
+const d=await r.json();
+displayResults(d,{magnitude:e.magnitude,latitude:e.latitude,longitude:e.longitude,depth:e.depth,place:e.place,time:e.time});
+}catch(err){alert('Tahmin hatasi: '+err.message)}finally{hideLoading()}
+}
+
+async function predictManual(){
+const ms={
+time:new Date().toISOString(),
+magnitude:parseFloat(document.getElementById('mMag').value)||6.0,
+latitude:parseFloat(document.getElementById('mLat').value)||39.0,
+longitude:parseFloat(document.getElementById('mLon').value)||35.0,
+depth:parseFloat(document.getElementById('mDepth').value)||10.0
+};
+showLoading();
+try{
+const r=await fetch(API+'/predict',{
+method:'POST',
+headers:{'Content-Type':'application/json'},
+body:JSON.stringify({mainshock:ms,aftershocks_so_far:[],horizon_days:30,model_type:'statistical'})
+});
+if(!r.ok){const err=await r.json();throw new Error(err.detail||'Sunucu hatasi ('+r.status+')')}
+const d=await r.json();
+displayResults(d,ms);
+}catch(err){alert('Tahmin hatasi: '+err.message)}finally{hideLoading()}
+}
+
+function displayResults(pred,ms){
+document.getElementById('empty').classList.add('hidden');
+document.getElementById('results').classList.remove('hidden');
+document.getElementById('results').scrollIntoView({behavior:'smooth',block:'start'});
+
+// Mainshock info
+document.getElementById('mainshockInfo').textContent='M'+ms.magnitude.toFixed(1)+' | '+ms.place+' | '+new Date(ms.time).toLocaleString('tr-TR');
+
+// Risk
+var risk=pred.risk_score||0;
+var level=pred.risk_level||'MEDIUM';
+var banner=document.getElementById('riskBanner');
+banner.className='glass rounded-xl p-5 flex items-center justify-between border-l-4 '+(level==='HIGH'?'border-red-500':level==='MEDIUM'?'border-orange-500':'border-green-500');
+document.getElementById('riskLevel').textContent=level==='HIGH'?'YUKSEK RISK':level==='MEDIUM'?'ORTA RISK':'DUSUK RISK';
+document.getElementById('riskLevel').className='text-2xl font-bold mt-1 '+(level==='HIGH'?'text-red-400':level==='MEDIUM'?'text-orange-400':'text-green-400');
+document.getElementById('riskScore').textContent=risk;
+document.getElementById('riskScore').className='text-4xl font-bold '+(level==='HIGH'?'text-red-400':level==='MEDIUM'?'text-orange-400':'text-green-400');
+
+// Magnitude bins
+var bins=pred.magnitude_bins||{};
+var maxBin=Math.max(...Object.values(bins),0.1);
+var colors={'M2_M3':'bg-blue-500','M3_M4':'bg-green-500','M4_M5':'bg-yellow-500','M5_M6':'bg-orange-500','M6_plus':'bg-red-500'};
+var labels={'M2_M3':'M2.0 - M3.0','M3_M4':'M3.0 - M4.0','M4_M5':'M4.0 - M5.0','M5_M6':'M5.0 - M6.0','M6_plus':'M6.0 ve ustu'};
+document.getElementById('magBins').innerHTML=Object.entries(bins).map(function(kv){
+var k=kv[0],v=kv[1];
+var pct=Math.min(v/maxBin*100,100);
+return '<div><div class="flex justify-between text-sm mb-1"><span>'+labels[k]+'</span><span class="font-bold '+(v>0?'text-white':'text-gray-500')+'">'+v+' adet</span></div><div class="w-full bg-slate-700 rounded-full h-2"><div class="mag-bar '+colors[k]+'" style="width:'+pct+'%"></div></div></div>';
+}).join('');
+
+// Time windows
+var tw=pred.time_windows||{};
+var twLabels={'first_6h':'Ilk 6 Saat','first_24h':'Ilk 24 Saat','day_1_3':'1-3 Gun','day_3_7':'3-7 Gun','day_7_30':'7-30 Gun'};
+document.getElementById('timeWindows').innerHTML=Object.entries(tw).map(function(kv){
+var k=kv[0],v=kv[1];
+return '<div class="bg-slate-800 rounded-lg p-3 text-center"><div class="text-2xl font-bold text-blue-400">'+v+'</div><div class="text-xs text-gray-400 mt-1">'+twLabels[k]+'</div></div>';
+}).join('');
+
+// Largest aftershock
+var la=pred.largest_aftershock||{};
+document.getElementById('largestAftershock').innerHTML=
+'<div><span class="text-gray-400">Beklenen buyukluk:</span> <b class="text-purple-300 text-lg">M'+(la.expected_magnitude||'?')+'</b></div>'+
+'<div><span class="text-gray-400">Olasi aralik:</span> <b>M'+(la.likely_range||['?','?']).join(' - M')+'</b></div>'+
+'<div><span class="text-gray-400">Ana depremi gecme ihtimali:</span> <b class="text-red-400">'+((la.prob_exceeds_mainshock||0.05)*100).toFixed(1)+'%</b></div>';
+
+// Charts
+renderOmoriChart(pred.intensity_forecast||[]);
+renderGRChart(pred.current_gr_params||{});
+updateMap(ms);
+}
+
+function renderOmoriChart(fc){
+if(!fc||!fc.length)return;
+var trace1={x:fc.map(function(f){return f.day}),y:fc.map(function(f){return f.daily_rate}),name:'Gunluk Artci Orani',type:'scatter',mode:'lines',line:{color:'#f97316',width:2.5},fill:'tozeroy',fillcolor:'rgba(249,115,22,0.15)'};
+var trace2={x:fc.map(function(f){return f.day}),y:fc.map(function(f){return f.cumulative_count}),name:'Kumulatif Artci',type:'scatter',mode:'lines',line:{color:'#3b82f6',width:2.5},yaxis:'y2'};
+Plotly.newPlot('omoriChart',[trace1,trace2],{paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{color:'#94a3b8',size:11},xaxis:{title:'Gun (ana deprem sonrasi)',gridcolor:'#334155',dtick:5},yaxis:{title:'Gunluk Oran',gridcolor:'#334155'},yaxis2:{title:'Kumulatif',overlaying:'y',side:'right',gridcolor:'#334155'},legend:{orientation:'h',y:-0.25,x:0.5,xanchor:'center'},margin:{t:10,r:55,b:60,l:55}},{responsive:true,displayModeBar:false});
+}
+
+function renderGRChart(p){
+if(!p||!p.b)return;
+var mags=[],counts=[];
+for(var m=(p.Mc||2.5);m<=7.5;m+=0.1){mags.push(m.toFixed(1));counts.push(Math.max(Math.pow(10,p.a-p.b*m),0.001))}
+Plotly.newPlot('grChart',[{x:mags,y:counts,type:'scatter',mode:'lines',line:{color:'#22c55e',width:2.5},fill:'tozeroy',fillcolor:'rgba(34,197,94,0.15)'}],{paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{color:'#94a3b8',size:11},xaxis:{title:'Buyukluk (Mw)',gridcolor:'#334155'},yaxis:{title:'N (>= M)',type:'log',gridcolor:'#334155'},margin:{t:10,r:20,b:50,l:55}},{responsive:true,displayModeBar:false});
+}
+
+function updateMap(ms){
+if(!map)initMap();
+markers.forEach(function(m){map.removeLayer(m)});
+markers=[];
+var mk=L.circleMarker([ms.latitude,ms.longitude],{radius:8+ms.magnitude*1.8,fillColor:'#ef4444',color:'#fff',weight:2.5,fillOpacity:0.85}).addTo(map);
+mk.bindPopup('<b>&#x1F4A5; Ana Deprem</b><br><b>M'+ms.magnitude.toFixed(1)+'</b><br>'+ms.place+'<br>Derinlik: '+ms.depth.toFixed(0)+' km');
+markers.push(mk);
+map.setView([ms.latitude,ms.longitude],ms.magnitude>=7?5:6);
+}
+
+function showLoading(){document.getElementById('loading').classList.remove('hidden');document.getElementById('empty').classList.add('hidden');document.getElementById('results').classList.add('hidden')}
+function hideLoading(){document.getElementById('loading').classList.add('hidden')}
+function scrollToManual(){document.getElementById('manualSection').scrollIntoView({behavior:'smooth'})}
+
+document.addEventListener('DOMContentLoaded',function(){initMap();loadRecentMainshocks()});
+</script>
+</body>
+</html>
